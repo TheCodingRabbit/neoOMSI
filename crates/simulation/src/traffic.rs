@@ -263,12 +263,6 @@ impl Lane {
     pub fn end_heading(&self) -> f32 {
         *self.headings.last().unwrap()
     }
-
-    /// Does `p` lie beyond the end of the lane (past the line across its end)?
-    pub fn past_end(&self, p: DVec3) -> bool {
-        let rel = p - self.end();
-        DVec2::new(rel.x, rel.y).dot(heading_dir(self.end_heading() as f64)) > 0.0
-    }
 }
 
 /// Speed limit of a flight path without a `[rule] speedlimit` (km/h): none, the aircraft
@@ -538,7 +532,7 @@ fn polyline_crossing(a: &Lane, b: &Lane) -> Option<(f32, f32)> {
 }
 
 /// Grid cell size of `Network::grid` (m).
-pub const GRID_CELL: f64 = 50.0;
+pub const GRID_CELL: f64 = 25.0;
 
 impl Network {
     /// The sign of a lateral offset (positive to the right) towards the oncoming lane:
@@ -1580,9 +1574,18 @@ impl Network {
                     }
                     seen.push(i);
                     let l = &self.lanes[i];
+                    
                     if l.kind != kind {
                         continue;
                     }
+                   
+                    if kind == LaneKind::Street && (l.no_cars || l.invisible) {
+                        continue;
+                    }
+                    if l.length() < 0.5 {
+                        continue;
+                    }
+                    
                     if let Some((s, d)) = l.nearest_point(p) {
                         if best.map(|b| d < b.2).unwrap_or(true) {
                             best = Some((i, s, d));
@@ -3091,9 +3094,8 @@ impl AiState {
             };
             let Some(next) = self.planned_next.or(fallback) else {
                 // the end of a flight path: the aircraft flies on straight (the way runs on
-                // along the end tangent) until the traffic takes it away out of sight; a
-                // train runs on too, its cars taken away one by one at the end
-                if matches!(l.kind, LaneKind::Air | LaneKind::Rail) {
+                // along the end tangent) until the traffic takes it away out of sight
+                if l.kind == LaneKind::Air {
                     break;
                 }
                 return false; // dead end: despawn
@@ -3809,30 +3811,6 @@ mod tests {
             car.plan_next(&net);
             assert_eq!(car.planned_next, Some(2), "seed {seed}");
         }
-    }
-
-    #[test]
-    fn a_train_runs_past_the_end_of_its_track() {
-        // at a dead end a car is taken off, a train runs on (its cars go one by one)
-        for (kind, runs_on) in [(LaneKind::Street, false), (LaneKind::Rail, true)] {
-            let lane = LaneBuilder::arc(DVec3::ZERO, 0.0, 30.0, 0.0, 0.0, kind, 3.0);
-            let mut net = Network {
-                lanes: vec![lane],
-                ..Default::default()
-            };
-            net.link(1.5);
-            let mut car = AiState::new(0, 25.0, 1);
-            car.speed = 10.0;
-            let on = (0..50).all(|_| car.drive(&net, 0.1, None, None));
-            assert_eq!(on, runs_on, "{kind:?}");
-        }
-    }
-
-    #[test]
-    fn a_point_beyond_the_lane_end_is_past_it() {
-        let l = LaneBuilder::arc(DVec3::ZERO, 0.0, 30.0, 0.0, 0.0, LaneKind::Rail, 3.0);
-        assert!(l.past_end(l.at_ext(31.0).0));
-        assert!(!l.past_end(l.at_ext(29.0).0));
     }
 
     #[test]
